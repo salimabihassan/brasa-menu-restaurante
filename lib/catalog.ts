@@ -12,7 +12,10 @@ export const products = [
  {id:'combo',name:'Tu combo favorito',category:'Combos',price:10990,description:'La Clásica + papas de la casa + bebida de 350 ml.',image:'photo-1610614819513-58e34989848b',badge:'EL PLAN COMPLETO',available:true}
 ];
 export type Product = typeof products[number];
-export type CartItem = { key:string; product:Product; quantity:number; extras:string[] };
-export type Order = { id:string; branchId:string; createdAt:string; name:string; phone:string; note:string; items:CartItem[]; total:number; method:'transfer'|'card'; payment:'review'|'paid'|'rejected'; status:'pending'|'preparing'|'ready'|'delivered'|'cancelled'; receipt?:string; receiptName?:string; reason?:string; history:{at:string; text:string}[] };
-export const itemTotal = (item: CartItem) => (item.product.price + extras.filter(e=>item.extras.includes(e.id)).reduce((s,e)=>s+e.price,0))*item.quantity;
+export type CartItem = { key:string; product:Product; quantity:number; extras:string[]; unitPrice?:number; extraDetails?:{id:string;name:string;price:number}[] };
+export type Order = { version?:number; id:string; branchId:string; createdAt:string; name:string; phone:string; note:string; items:CartItem[]; total:number; method:'transfer'|'card'; payment:'review'|'paid'|'rejected'; status:'pending'|'preparing'|'ready'|'delivered'|'cancelled'; receipt?:string; receiptName?:string; reason?:string; history:{at:string; text:string}[] };
+export const itemTotal = (item: CartItem) => (item.unitPrice ?? (item.product.price + extras.filter(e=>item.extras.includes(e.id)).reduce((s,e)=>s+e.price,0)))*item.quantity;
 export const statusNames = {pending:'Por aceptar',preparing:'En preparación',ready:'Listo para retirar',delivered:'Entregado',cancelled:'Cancelado'};
+
+
+export const itemExtraNames = (item:CartItem) => (item.extraDetails ?? extras.filter(e=>item.extras.includes(e.id))).map(e=>e.name).join(', ');
