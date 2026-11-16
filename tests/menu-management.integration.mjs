@@ -1,0 +1,57 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {localStatus,localClient,check} from '../scripts/local-runtime.mjs';
+test('menu CRUD, branch permissions, photos and immutable order snapshots on local Supabase',async()=>{
+ const status=localStatus(),admin=localClient(status,true),staff=localClient(status),customer=localClient(status);
+ const branch='menu-check-'+randomUUID(),id=randomUUID(),orderId=randomUUID();let staffUser,customerUser;
+ const path=`${branch}/${randomUUID()}.png`;
+ const manage=(client,kind,doc)=>client.rpc('brasa_manage_menu',{p_branch:branch,p_kind:kind,p_doc:doc});
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9sAAAAASUVORK5CYII=','base64');
+ try{
+  check(await admin.from('brasa_branches').insert({id:branch,name:'Prueba aislada menú'}));
+  const email=`menu-${randomUUID()}@brasa.test`,password=randomUUID();
+  staffUser=check(await admin.auth.admin.createUser({email,password,email_confirm:true})).user;
+  check(await staff.auth.signInWithPassword({email,password}));
+  check(await admin.from('brasa_memberships').insert({user_id:staffUser.id,branch_id:branch,role:'admin'}));
+  customerUser=check(await customer.auth.signInAnonymously()).user;
+  assert.ok((await manage(customer,'category',{name:'Prueba'})).error);
+  assert.ok((await staff.rpc('brasa_manage_menu',{p_branch:'santiago-centro',p_kind:'category',p_doc:{name:'No permitido'}})).error);
+  assert.ok((await customer.storage.from('brasa-menu').upload(path,png,{contentType:'image/png'})).error);
+  check(await manage(staff,'category',{name:'Postres de prueba'}));
+  check(await manage(staff,'extra',{id:'sauce',name:'Salsa dulce',price:500,active:true}));
+  check(await staff.storage.from('brasa-menu').upload(path,png,{contentType:'image/png'}));
+  const product={id,name:'Postre de prueba',category:'Postres de prueba',description:'Producto de prueba aislado',price:2990,image:`menu:${path}`,badge:'Nuevo',available:true,hidden:false,extraIds:['sauce']};
+  check(await manage(staff,'product',product));
+  const availability=value=>staff.rpc('brasa_set_product_available',{p_branch:branch,p_product:id,p_available:value});
+  assert.ok((await customer.rpc('brasa_set_product_available',{p_branch:branch,p_product:id,p_available:false})).error);
+  check(await availability(false));
+  const sold=check(await admin.from('brasa_catalog').select('product').eq('branch_id',branch).eq('id',id).single()).product;
+  assert.deepEqual(sold,{...product,available:false});
+  check(await availability(true));
+  const photo=await fetch(`${status.url}/storage/v1/object/public/brasa-menu/${path}`);assert.equal(photo.status,200);assert.ok((await photo.arrayBuffer()).byteLength>0);
+  const create=(extraIds=['sauce'],expected=3490,target=orderId)=>customer.rpc('brasa_create_order',{p_id:target,p_branch:branch,p_name:'Cliente prueba menú',p_phone:'999999999',p_note:'',p_method:'card',p_items:[{productId:id,quantity:1,extras:extraIds}],p_receipt:null,p_receipt_name:null,p_expected_total:expected});
+  const original=check(await create());assert.equal(original.total,3490);assert.equal(original.items[0].extraDetails[0].name,'Salsa dulce');
+  check(await manage(staff,'product',{...product,name:'Postre editado',price:3990}));
+  check(await manage(staff,'extra',{id:'sauce',name:'Salsa editada',price:700,active:true}));
+  check(await manage(staff,'category',{name:'Dulces de prueba',oldName:'Postres de prueba'}));
+  const stored=check(await customer.from('brasa_orders').select('payload').eq('id',orderId).single()).payload;
+  assert.equal(stored.items[0].product.name,'Postre de prueba');assert.equal(stored.total,3490);assert.equal(stored.items[0].extraDetails[0].price,500);
+  assert.ok((await create(['sauce'],3490,randomUUID())).error,'stale cart total must fail');
+  const fresh=check(await create(['sauce'],4690,randomUUID()));assert.equal(fresh.items[0].product.category,'Dulces de prueba');
+  check(await manage(staff,'extra',{id:'sauce',name:'Salsa editada',price:700,active:false}));
+  assert.ok((await create(['sauce'],4690,randomUUID())).error,'inactive extra must fail');
+  check(await manage(staff,'product',{...product,category:'Dulces de prueba',hidden:true}));
+  assert.ok((await create([],2990,randomUUID())).error,'hidden product must fail');
+  check(await manage(staff,'product',{...product,category:'Dulces de prueba',available:false}));
+  assert.ok((await create([],2990,randomUUID())).error,'sold out product must fail');
+  console.log('OK · Fotos públicas, permisos por sucursal, precios actuales y pedidos históricos intactos.');
+ }finally{
+  check(await admin.storage.from('brasa-menu').remove([path]));
+  for(const table of ['brasa_orders','brasa_memberships','brasa_catalog','brasa_categories','brasa_menu_extras'])check(await admin.from(table).delete().eq('branch_id',branch));
+  check(await admin.from('brasa_branches').delete().eq('id',branch));
+  if(customerUser)check(await admin.auth.admin.deleteUser(customerUser.id));
+  if(staffUser)check(await admin.auth.admin.deleteUser(staffUser.id));
+  await Promise.all([staff.auth.signOut(),customer.auth.signOut()]);
+ }
+});

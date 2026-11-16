@@ -12,4 +12,8 @@ insert into public.brasa_catalog(branch_id,id,product) values ('santiago-centro'
 insert into public.brasa_extras(id,name,price) values ('cheese','Queso cheddar',700) on conflict do nothing;
 insert into public.brasa_extras(id,name,price) values ('bacon','Tocino crocante',1200) on conflict do nothing;
 insert into public.brasa_extras(id,name,price) values ('avocado','Palta',1000) on conflict do nothing;
+-- Populate editable menu data on fresh databases after all migrations.
+insert into public.brasa_categories(branch_id,name) select distinct branch_id,product->>'category' from public.brasa_catalog on conflict do nothing;
+insert into public.brasa_menu_extras(branch_id,id,name,price) select b.id,e.id,e.name,e.price from public.brasa_branches b cross join public.brasa_extras e on conflict do nothing;
+update public.brasa_catalog c set product=product||jsonb_build_object('hidden',false,'extraIds',case when product->>'category' in ('Hamburguesas','Combos') then coalesce((select jsonb_agg(e.id order by e.id) from public.brasa_menu_extras e where e.branch_id=c.branch_id and e.active),'[]') else '[]'::jsonb end) where not product ? 'extraIds';
 commit;

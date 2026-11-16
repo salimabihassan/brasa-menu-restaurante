@@ -18,11 +18,13 @@ Abrir http://localhost:3000. `npm run build` genera la versión estática en `ou
 1. Agregar productos y extras al carrito.
 2. Completar nombre y teléfono ficticios.
 3. Adjuntar una imagen/PDF de muestra (máximo 1 MB) o elegir tarjeta simulada.
-4. Abrir «Panel del local». Aprobar/rechazar comprobante, aceptar el pedido, marcar listo y entregado.
+4. Abrir `/local/` (cocina). Aprobar/rechazar comprobante, aceptar el pedido, marcar listo y entregado.
 5. Volver a «Mi pedido» para consultar historial. Si el comprobante fue rechazado, adjuntar otro.
 6. Activar sonido en el panel; los pendientes de revisión generan recordatorios cada 60 segundos mientras esté abierto.
 
 ## Conexión opcional a Supabase
+
+Para desarrollar y verificar primero en este computador: seguir `docs/local-development.md`. `npm run db:start`, `npm run db:setup` y `npm run dev` activan el entorno local; `npm run test:local` prueba la API real sin publicar nada.
 
 La integración está preparada en `lib/supabase.ts` y `lib/cloud-orders.ts`, con migración PostgreSQL y datos iniciales en `supabase/`. Ver `docs/supabase-setup.md` para activar un proyecto nuevo. Sin variables públicas configuradas sigue funcionando la demo local. Con Supabase configurado, usa acceso del personal, comprobantes privados y sincronización cada 8 segundos; no mezcla ni migra automáticamente los pedidos locales anteriores.
 
@@ -41,3 +43,5 @@ Crear/configurar el proyecto Supabase y validar Auth/Storage entre dispositivos.
 ## GitHub
 
 El repositorio incluye .gitignore para dependencias, builds y secretos. No se ha creado ni publicado un repositorio GitHub. No incluir archivos .env ni datos reales al subirlo.
+
+La administración del menú está en `/admin/`, separada de la web pública `/`. Ver [gestión del menú](docs/menu-management.md).

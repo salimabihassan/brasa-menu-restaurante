@@ -8,3 +8,6 @@ export function canPrepare(order: Pick<Order,'payment'|'status'>) {
 export function needsReview(order: Pick<Order,'payment'|'status'>) {
  return order.payment === 'review' && order.status !== 'cancelled';
 }
+export function needsAttention(order:Pick<Order,'payment'|'status'>){
+ return order.status==='pending'&&(order.payment==='review'||order.payment==='paid');
+}

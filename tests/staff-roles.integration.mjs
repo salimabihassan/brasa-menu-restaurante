@@ -1,0 +1,82 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {localStatus,localClient,check} from '../scripts/local-runtime.mjs';
+test('real user creation, three roles, revocation and branch boundaries',async()=>{
+ const status=localStatus(),root=localClient(status,true),owner=localClient(status),clients=[],users=[];
+ const branch='roles-check-'+randomUUID();let ownerId;
+ const call=async(client,body,origin='http://localhost:3000')=>{
+  const session=check(await client.auth.getSession()).session;
+  const response=await fetch(`${status.url}/functions/v1/manage-staff`,{method:'POST',headers:{'Content-Type':'application/json',Origin:origin,...(session?{Authorization:`Bearer ${session.access_token}`}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});
+  return {status:response.status,body:await response.json()};
+ };
+ const list=client=>client.rpc('brasa_list_staff',{p_branch:branch});
+ const manage=(client,kind,doc)=>client.rpc('brasa_manage_menu',{p_branch:branch,p_kind:kind,p_doc:doc});
+ const update=(target,role,active)=>owner.rpc('brasa_update_staff',{p_branch:branch,p_user:target,p_role:role,p_active:active,p_name:'Usuario prueba'});
+ try{
+  check(await root.from('brasa_branches').insert({id:branch,name:'Prueba aislada permisos'}));
+  const email=`admin-${randomUUID()}@brasa.test`,password='Test-'+randomUUID();
+  ownerId=check(await root.auth.admin.createUser({email,password,email_confirm:true})).user.id;
+  check(await root.from('brasa_memberships').insert({user_id:ownerId,branch_id:branch,role:'admin',display_name:'Administrador prueba'}));
+  check(await owner.auth.signInWithPassword({email,password}));
+  const empty=localClient(status);clients.push(empty);
+  assert.equal((await call(empty,{})).status,401);
+  assert.equal((await call(owner,{},'https://other.invalid')).status,403);
+  assert.equal((await call(owner,{branchId:branch,name:'Inválido',email:'bad',password:'123',role:'admin'})).status,400);
+  for(const role of ['menu','local','admin']){
+   const email=`${role}-${randomUUID()}@brasa.test`,password='Test-'+randomUUID();
+   const result=await call(owner,{branchId:branch,name:`Prueba ${role}`,email,password,role});
+   assert.equal(result.status,201,JSON.stringify(result.body));users.push(result.body.userId);
+   const client=localClient(status);clients.push(client);check(await client.auth.signInWithPassword({email,password}));
+   const member=check(await client.from('brasa_memberships').select('role,active').eq('branch_id',branch).single());assert.equal(member.role,role);assert.equal(member.active,true);
+  }
+  const [menu,local,secondAdmin]=clients.slice(1);
+  const account={bank:'Banco de prueba',account_type:'Cuenta vista',account_number:'0012345678',holder:'Titular de prueba',rut:'12.345.678-5',email:'transferencias@example.invalid',enabled:false};
+  const bank=(client,details)=>client.rpc('brasa_save_bank_details',{p_branch:branch,p_details:details});
+  check(await bank(owner,account));
+  assert.ok((await bank(menu,{...account,enabled:true})).error);assert.ok((await bank(local,{...account,enabled:true})).error);
+  assert.equal(check(await empty.from('brasa_bank_details').select('branch_id').eq('branch_id',branch)).length,0);
+  const badNumber=await bank(owner,{...account,enabled:true,account_number:'abc'});assert.equal(badNumber.error.details,'account_number');
+  const badRut=await bank(owner,{...account,enabled:true,rut:'12345678-6'});assert.equal(badRut.error.details,'rut');
+  for(const [rut,expected] of [['6k',true],['14-0',true],['0-0',false],['12345678-6',false]])assert.equal(check(await owner.rpc('brasa_valid_rut',{p_rut:rut.replace('k','K').replace(/^6K$/,'6-K')})),expected);
+  check(await bank(owner,{...account,enabled:true}));
+  const shown=check(await empty.from('brasa_bank_details').select('rut,account_number').eq('branch_id',branch).single());
+  assert.equal(shown.rut,'12345678-5');assert.equal(shown.account_number,'0012345678');
+  check(await bank(owner,{...account,enabled:false}));
+  assert.equal(check(await empty.from('brasa_bank_details').select('branch_id').eq('branch_id',branch)).length,0);
+  assert.ok((await list(menu)).error);assert.ok((await list(local)).error);assert.equal(check(await list(owner)).length,4);
+  const attempted={branchId:branch,name:'Escalada',email:`blocked-${randomUUID()}@brasa.test`,password:'Test-'+randomUUID(),role:'admin'};
+  assert.equal((await call(menu,attempted)).status,403);assert.equal((await call(local,attempted)).status,403);
+  assert.equal((await call(owner,{...attempted,branchId:'santiago-centro'})).status,403);
+  check(await manage(menu,'category',{name:'Categoría menú'}));
+  assert.ok((await manage(local,'category',{name:'No permitida'})).error);
+  const product={id:'test',name:'Producto prueba',category:'Categoría menú',description:'',price:1000,image:'',badge:'',available:true,hidden:false,extraIds:[]};
+  check(await manage(menu,'product',product));
+  const customer=localClient(status);clients.push(customer);const customerUser=check(await customer.auth.signInAnonymously()).user;users.push(customerUser.id);
+  const orderId=randomUUID();const order=check(await customer.rpc('brasa_create_order',{p_id:orderId,p_branch:branch,p_name:'Cliente prueba',p_phone:'999999999',p_note:'',p_method:'card',p_items:[{productId:'test',quantity:1,extras:[]}],p_receipt:null,p_receipt_name:null,p_expected_total:1000}));
+  assert.equal(check(await menu.from('brasa_orders').select('id').eq('id',orderId)).length,0);
+  assert.ok((await menu.rpc('brasa_staff_action',{p_id:orderId,p_version:order.version,p_action:'preparing',p_reason:''})).error);
+  check(await local.rpc('brasa_staff_action',{p_id:orderId,p_version:order.version,p_action:'preparing',p_reason:''}));
+  const photoPath=`${branch}/${randomUUID()}.png`,png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9sAAAAASUVORK5CYII=','base64');
+  assert.ok((await local.storage.from('brasa-menu').upload(photoPath,png,{contentType:'image/png'})).error);
+  check(await menu.storage.from('brasa-menu').upload(photoPath,png,{contentType:'image/png'}));
+  check(await root.storage.from('brasa-menu').remove([photoPath]));
+  check(await update(users[0],'menu',false));
+  assert.ok((await manage(menu,'category',{name:'No después de desactivar'})).error,'existing JWT must lose menu access');
+  check(await update(users[1],'menu',true));
+  assert.equal(check(await local.from('brasa_orders').select('id').eq('id',orderId)).length,0,'existing JWT must lose order access after role change');
+  check(await manage(local,'category',{name:'Nuevo acceso menú'}));
+  assert.ok((await update(ownerId,'local',true)).error);assert.ok((await update(ownerId,'admin',false)).error);
+  check(await secondAdmin.rpc('brasa_update_staff',{p_branch:branch,p_user:users[2],p_role:'admin',p_active:true,p_name:'Administrador segundo'}));
+  check(await update(users[2],'admin',false));
+  assert.equal((await call(secondAdmin,attempted)).status,403,'deactivated admin with existing JWT cannot create accounts');
+  assert.ok((await local.rpc('brasa_add_staff',{p_requester:ownerId,p_branch:branch,p_user:users[0],p_role:'admin',p_name:'No permitido'})).error);
+  console.log('OK · Tres niveles, creación por servicio, límites por sucursal y revocación con sesión abierta.');
+ }finally{
+  for(const table of ['brasa_orders','brasa_memberships','brasa_catalog','brasa_categories','brasa_menu_extras','brasa_bank_details'])check(await root.from(table).delete().eq('branch_id',branch));
+  check(await root.from('brasa_branches').delete().eq('id',branch));
+  for(const id of users)check(await root.auth.admin.deleteUser(id));
+  if(ownerId)check(await root.auth.admin.deleteUser(ownerId));
+  await Promise.all([owner,...clients].map(client=>client.auth.signOut()));
+ }
+});

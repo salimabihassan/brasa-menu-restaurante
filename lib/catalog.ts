@@ -11,11 +11,13 @@ export const products = [
  {id:'cola',name:'Bebida helada',category:'Bebidas',price:1990,description:'Bebida cola de 350 ml. El acompañante de siempre.',image:'photo-1622483767028-3f66f32aef97',badge:'',available:true},
  {id:'combo',name:'Tu combo favorito',category:'Combos',price:10990,description:'La Clásica + papas de la casa + bebida de 350 ml.',image:'photo-1610614819513-58e34989848b',badge:'EL PLAN COMPLETO',available:true}
 ];
-export type Product = typeof products[number];
-export type CartItem = { key:string; product:Product; quantity:number; extras:string[]; unitPrice?:number; extraDetails?:{id:string;name:string;price:number}[] };
-export type Order = { version?:number; id:string; branchId:string; createdAt:string; name:string; phone:string; note:string; items:CartItem[]; total:number; method:'transfer'|'card'; payment:'review'|'paid'|'rejected'; status:'pending'|'preparing'|'ready'|'delivered'|'cancelled'; receipt?:string; receiptName?:string; reason?:string; history:{at:string; text:string}[] };
+export type Product = typeof products[number] & {extraIds?:string[];hidden?:boolean};
+export type MenuExtra = {id:string;name:string;price:number;active?:boolean};
+export type CartItem = { key:string; product:Product; quantity:number; extras:string[]; note?:string; unitPrice?:number; extraDetails?:{id:string;name:string;price:number}[] };
+export type Order = { version?:number; id:string; branchId:string; createdAt:string; name:string; phone:string; note:string; items:CartItem[]; total:number; subtotal?:number;deliveryFee?:number;fulfillment?:'pickup'|'delivery';deliveryQuoteId?:string;delivery?:{address:string;commune:string;instructions:string;distanceMeters:number;distanceKm:number;durationSeconds:number;fee:number;pricePerKm:number;originAddress:string};method:'transfer'|'card'; payment:'review'|'paid'|'rejected'; status:'pending'|'preparing'|'ready'|'out_for_delivery'|'delivered'|'cancelled'; receipt?:string; receiptName?:string; reason?:string; history:{at:string; text:string}[] };
 export const itemTotal = (item: CartItem) => (item.unitPrice ?? (item.product.price + extras.filter(e=>item.extras.includes(e.id)).reduce((s,e)=>s+e.price,0)))*item.quantity;
-export const statusNames = {pending:'Por aceptar',preparing:'En preparación',ready:'Listo para retirar',delivered:'Entregado',cancelled:'Cancelado'};
+export const statusNames = {pending:'Por aceptar',preparing:'En preparación',ready:'Listo para retirar',out_for_delivery:'En reparto',delivered:'Entregado',cancelled:'Cancelado'};
+export const orderStatusName=(order:Order)=>order.fulfillment==='delivery'&&order.status==='ready'?'Listo para despacho':statusNames[order.status];
 
 
 export const itemExtraNames = (item:CartItem) => (item.extraDetails ?? extras.filter(e=>item.extras.includes(e.id))).map(e=>e.name).join(', ');

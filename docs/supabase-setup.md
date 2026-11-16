@@ -11,7 +11,18 @@ En https://supabase.com/dashboard elegir **New project**, nombre `brasa-demo`, o
 En SQL Editor ejecutar, en este orden y una sola vez:
 
 1. `supabase/migrations/202611130001_brasa.sql`.
-2. `supabase/seed.sql`.
+2. `supabase/migrations/202611130002_item_notes.sql`.
+3. `supabase/migrations/202611140001_ready_notifications.sql`.
+4. `supabase/migrations/202611140002_menu_management.sql`.
+5. `supabase/migrations/202611140003_menu_extra_lookup.sql`.
+6. `supabase/migrations/202611150001_staff_roles.sql`.
+7. `supabase/migrations/202611150002_product_availability.sql`.
+8. `supabase/migrations/202611160001_bank_details.sql`.
+9. `supabase/migrations/202611160002_bank_validation.sql`.
+10. `supabase/migrations/202611160003_staff_push.sql`.
+11. `supabase/migrations/202611160004_staff_push_guards.sql`.
+12. `supabase/migrations/202611160005_delivery.sql`.
+13. `supabase/seed.sql`.
 
 La migración crea tablas, funciones PostgreSQL, políticas RLS y un bucket privado de comprobantes con límite de 1 MB. La aplicación estática llama funciones RPC: precios, permisos, idempotencia, historial y transiciones se validan en PostgreSQL. No usa service_role ni requiere un servidor Next.js para esta demo. Prisma se pospone: no debe mantener migraciones paralelas de estas mismas tablas.
 
@@ -26,8 +37,8 @@ Antes de compartir una demo con una audiencia amplia, configurar protección con
 Crear un usuario de correo y contraseña desde Authentication → Users, con correo confirmado. La contraseña de este usuario la elige el propietario; no se comparte en el chat. Copiar únicamente su UUID y ejecutar:
 
 ```sql
-insert into public.brasa_memberships(user_id,branch_id)
-values ('UUID_DEL_USUARIO', 'santiago-centro');
+insert into public.brasa_memberships(user_id,branch_id,role,active,display_name)
+values ('UUID_DEL_USUARIO', 'santiago-centro','admin',true,'Administrador');
 ```
 
 La cuenta de Supabase Dashboard y la cuenta del personal de BRASA son accesos distintos. Los clientes no pueden darse permisos de personal. Una membresía autoriza solo su sucursal. La sesión del personal y la sesión temporal del cliente se guardan por separado.
@@ -58,3 +69,23 @@ La actualización remota usa consultas cada 8 segundos y al recuperar foco; aún
 ## Pendientes para uso comercial
 
 Pasarela real y webhooks, protección contra abuso, limpieza de archivos huérfanos por intentos fallidos, retención de datos y respaldo, seguimiento recuperable fuera del navegador original y gestión de roles. La tarjeta actual es exclusivamente una simulación autorizada por el campo demo_payments de la sucursal; no registra un cobro real.
+
+## Administración del menú
+
+El cliente usa `/`, cocina `/local/` y administración `/admin/`. Los paneles del personal requieren la cuenta de la sucursal. El bucket público `brasa-menu` contiene fotos de productos; `brasa-receipts` sigue siendo privado. Ver [menú editable](menu-management.md).
+
+## Usuarios del equipo
+
+Configurar y desplegar `manage-staff` antes de crear cuentas desde la web. Ver [usuarios y permisos](users-permissions.md). La cuenta inicial debe tener rol `admin`; los usuarios siguientes se crean desde `/admin/usuarios/`.
+
+## Cuenta de transferencia
+
+El administrador configura `/admin/transferencias/` y habilita los datos que verá el cliente al pagar. Ver [datos de transferencia](bank-transfer-details.md). No se incluye una cuenta bancaria real en el repositorio.
+
+## Avisos al restaurante
+
+Ver [avisos del personal](staff-notifications.md): desplegar `send-staff-notification`, configurar HTTPS/VAPID y activar `supabase/staff-push-production.example.sql` para envío inmediato y reintentos independientes del panel abierto. La entrega con el teléfono bloqueado se verifica después de publicar.
+
+## Delivery
+
+Ver [delivery por calles](delivery.md). Desplegar `quote-delivery` con clave privada propia de Google Routes y configurar tarifas desde `/admin/delivery/`. No se incluye una clave ni se habilita delivery automáticamente.

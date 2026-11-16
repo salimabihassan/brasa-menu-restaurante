@@ -1,0 +1,76 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
+import {localStatus,localClient,check} from '../scripts/local-runtime.mjs';
+test('staff notifications: paid orders, receipt resubmission, permissions, session revocation and worker',async()=>{
+ const status=localStatus(),root=localClient(status,true),branch='staff-push-'+randomUUID(),other='staff-push-'+randomUUID();
+ const clients=[],users=[],paths=[];const endpoint=name=>`https://fcm.googleapis.com/${name}-${branch}`;
+ const keys=JSON.parse(await readFile('.local/web-push-keys.json','utf8'));
+ const subscribe=(client,name,target=branch)=>client.rpc('brasa_save_staff_push',{p_branch:target,p_endpoint:endpoint(name),p_p256dh:'a'.repeat(87),p_auth:'b'.repeat(22)});
+ const recipients=()=>root.rpc('brasa_staff_push_recipients',{p_branch:branch});
+ const call=async(token,body,origin='http://localhost:3000')=>{const response=await fetch(`${status.url}/functions/v1/send-staff-notification`,{method:'POST',headers:{'Content-Type':'application/json',Origin:origin,...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});return {status:response.status,body:await response.json()};};
+ const token=async client=>check(await client.auth.getSession()).session.access_token;
+ async function actor(role,target=branch){const client=localClient(status),email=`push-${randomUUID()}@brasa.test`,password='Test-'+randomUUID();clients.push(client);const user=check(await root.auth.admin.createUser({email,password,email_confirm:true})).user;users.push(user.id);check(await root.from('brasa_memberships').insert({user_id:user.id,branch_id:target,role,display_name:'Prueba avisos'}));check(await client.auth.signInWithPassword({email,password}));return {client,id:user.id};}
+ try{
+  check(await root.from('brasa_branches').insert([{id:branch,name:'Prueba aislada avisos'},{id:other,name:'Otra sucursal prueba'}]));
+  const admin=await actor('admin'),local=await actor('local'),menu=await actor('menu'),outsider=await actor('local',other);
+  const customer=localClient(status);clients.push(customer);const customerUser=check(await customer.auth.signInAnonymously()).user;users.push(customerUser.id);
+  check(await subscribe(admin.client,'admin'));check(await subscribe(local.client,'local'));
+  check(await customer.rpc('brasa_save_push_subscription',{p_endpoint:endpoint('admin'),p_p256dh:'a'.repeat(87),p_auth:'b'.repeat(22)}));
+  check(await customer.from('brasa_push_subscriptions').delete().eq('endpoint',endpoint('admin')));
+  assert.equal(check(await recipients()).length,2,'turning off customer alerts must preserve staff subscriptions on the same browser endpoint');
+  assert.ok((await subscribe(menu.client,'blocked')).error);assert.ok((await subscribe(customer,'blocked')).error);assert.ok((await subscribe(outsider.client,'blocked')).error);
+  assert.ok((await local.client.rpc('brasa_save_staff_push',{p_branch:branch,p_endpoint:'https://127.0.0.1/private',p_p256dh:'a'.repeat(87),p_auth:'b'.repeat(22)})).error);
+  assert.equal(check(await recipients()).length,2);
+  assert.equal(check(await local.client.from('brasa_staff_push_subscriptions').select('id').eq('branch_id',branch)).length,1);
+  assert.ok((await admin.client.rpc('brasa_staff_push_recipients',{p_branch:branch})).error);
+  check(await root.from('brasa_memberships').update({active:false}).eq('branch_id',branch).eq('user_id',local.id));assert.equal(check(await recipients()).length,1);
+  check(await root.from('brasa_memberships').update({active:true,role:'menu'}).eq('branch_id',branch).eq('user_id',local.id));assert.equal(check(await recipients()).length,1);
+  check(await root.from('brasa_memberships').update({role:'local'}).eq('branch_id',branch).eq('user_id',local.id));assert.equal(check(await recipients()).length,2);
+  const extraDevices=[];for(let index=0;index<9;index++)extraDevices.push(check(await subscribe(admin.client,`extra-${index}`)));
+  assert.ok((await subscribe(admin.client,'local')).error,'transferring an existing endpoint must not bypass the per-account device limit');
+  check(await root.from('brasa_staff_push_subscriptions').delete().in('id',extraDevices));
+  check(await local.client.auth.signOut({scope:'local'}));assert.equal(check(await recipients()).length,1,'logout must revoke the device even while the page is closed');
+  const product={id:'test',name:'Prueba',category:'Prueba',price:1000,description:'',image:'',badge:'',available:true,extraIds:[],hidden:false};
+  check(await root.from('brasa_catalog').insert({branch_id:branch,id:'test',product}));
+  const create=(id,method='card',receipt=null)=>customer.rpc('brasa_create_order',{p_id:id,p_branch:branch,p_name:'Cliente prueba',p_phone:'999999999',p_note:'',p_method:method,p_items:[{productId:'test',quantity:1,extras:[]}],p_receipt:receipt,p_receipt_name:receipt?'prueba.png':null,p_expected_total:1000});
+  const jobs=id=>root.from('brasa_staff_push_jobs').select('*').eq('order_id',id).order('order_version');
+  const card=randomUUID();check(await create(card));check(await create(card));assert.equal(check(await jobs(card)).length,1,'idempotent purchase creates only one alert');
+  const unpaid=randomUUID();assert.ok((await create(unpaid,'transfer')).error);assert.equal(check(await jobs(unpaid)).length,0);
+  const incomplete=randomUUID();check(await root.from('brasa_orders').insert({id:incomplete,branch_id:branch,customer_id:customerUser.id,payload:{method:'card',payment:'paid'}}));assert.equal(check(await jobs(incomplete)).length,0);
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9sAAAAASUVORK5CYII=','base64');
+  const transfer=randomUUID();const receipt=`${customerUser.id}/${transfer}/${randomUUID()}`;paths.push(receipt);check(await customer.storage.from('brasa-receipts').upload(receipt,png,{contentType:'image/png'}));check(await create(transfer,'transfer',receipt));
+  const first=check(await jobs(transfer));assert.equal(first.length,1);assert.equal(first[0].event,'new_order');
+  check(await admin.client.rpc('brasa_staff_action',{p_id:transfer,p_version:1,p_action:'reject',p_reason:'Comprobante de prueba rechazado'}));
+  const secondReceipt=`${customerUser.id}/${transfer}/${randomUUID()}`;paths.push(secondReceipt);check(await customer.storage.from('brasa-receipts').upload(secondReceipt,png,{contentType:'image/png'}));
+  check(await customer.rpc('brasa_resubmit_receipt',{p_id:transfer,p_version:2,p_path:secondReceipt,p_name:'nuevo.png'}));
+  assert.ok((await customer.rpc('brasa_resubmit_receipt',{p_id:transfer,p_version:2,p_path:secondReceipt,p_name:'nuevo.png'})).error);
+  const updated=check(await jobs(transfer));assert.equal(updated.length,2);assert.equal(updated[1].event,'receipt_resubmitted');
+  assert.equal(check(await menu.client.from('brasa_staff_push_jobs').select('id').eq('branch_id',branch)).length,0);
+  assert.equal(check(await customer.from('brasa_staff_push_jobs').select('id').eq('branch_id',branch)).length,0);
+  assert.ok((await admin.client.rpc('brasa_claim_staff_push',{p_id:first[0].id})).error);
+  assert.equal(check(await root.rpc('brasa_claim_staff_push',{p_id:first[0].id})).length,1);assert.equal(check(await root.rpc('brasa_claim_staff_push',{p_id:first[0].id})).length,0);
+  check(await root.from('brasa_staff_push_jobs').update({state:'pending',lease_until:null}).eq('id',first[0].id));
+  // No provider requests are made: remove synthetic subscriptions before dispatch.
+  check(await root.from('brasa_staff_push_subscriptions').delete().eq('branch_id',branch));
+  const cardJob=check(await jobs(card))[0].id;
+  assert.equal((await call(null,{jobId:cardJob})).status,401);
+  assert.equal((await call(keys.workerToken,null)).status,400);
+  assert.equal((await call(keys.workerToken,{},'https://other.invalid')).status,403);
+  for(const client of [menu.client,customer,outsider.client])assert.equal((await call(await token(client),{jobId:cardJob})).status,403);
+  const sent=await call(await token(admin.client),{jobId:cardJob});assert.equal(sent.status,200);assert.equal(sent.body.results[0].state,'no_subscriptions');
+  assert.equal((await call(keys.workerToken,{jobId:cardJob})).body.results[0].state,'already_processed_or_leased');
+  assert.equal((await call(keys.workerToken,{jobId:first[0].id})).body.results[0].state,'skipped','superseded receipt event must not notify');
+  check(await admin.client.rpc('brasa_staff_action',{p_id:transfer,p_version:3,p_action:'approve',p_reason:''}));
+  check(await admin.client.rpc('brasa_staff_action',{p_id:transfer,p_version:4,p_action:'preparing',p_reason:''}));
+  assert.equal((await call(keys.workerToken,{jobId:updated[1].id})).body.results[0].state,'skipped','accepted orders must not produce stale alerts');
+  console.log('OK · Avisos por pedido y comprobante, roles, sucursal, cierre de sesión, deduplicación y trabajador local.');
+ }finally{
+  if(paths.length)check(await root.storage.from('brasa-receipts').remove(paths));
+  for(const table of ['brasa_staff_push_subscriptions','brasa_orders','brasa_memberships','brasa_catalog'])check(await root.from(table).delete().in('branch_id',[branch,other]));
+  check(await root.from('brasa_branches').delete().in('id',[branch,other]));
+  for(const id of users)check(await root.auth.admin.deleteUser(id));
+  await Promise.all(clients.map(client=>client.auth.signOut()));
+ }
+});
