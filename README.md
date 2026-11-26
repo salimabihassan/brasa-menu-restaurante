@@ -1,5 +1,9 @@
 # BRASA · Pedidos con retiro
 
+**Demo en vivo:** [brasa-menu-restaurante.vercel.app](https://brasa-menu-restaurante.vercel.app) · [Administración del menú](https://brasa-menu-restaurante.vercel.app/admin/) · [Panel del local](https://brasa-menu-restaurante.vercel.app/local/)
+
+**Tecnologías:** Next.js, React, TypeScript, Supabase (PostgreSQL) y despliegue en Vercel.
+
 Prototipo de portafolio para Workana y Upwork. Una web responsive en español de Chile con precios CLP enteros. Marca, dirección y productos ficticios.
 
 ## Ejecutar
